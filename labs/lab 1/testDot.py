@@ -2,7 +2,7 @@
  This program is a warm up for coding. You get used to the coding 
 format and practice some coding skills. 
 """
-
+#comment 1
 ############################################# 
 """
 Copyright (C) 2025  Adrianna M. Gillman
@@ -22,13 +22,13 @@ Copyright (C) 2025  Adrianna M. Gillman
 """
 ############################################# 
 
-
+#imports the package numpy
 import numpy as np
 import numpy.linalg as la
 import math
 
 def driver():
-
+#sets n to 100
      n = 100
      x = np.linspace(0,np.pi,n)
 
