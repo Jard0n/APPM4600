@@ -16,6 +16,10 @@ f = lambda x: (math.sin(x) - 2 * x + 1)
 [astar, ier] = bisection_example.bisection(f, 0, 2, 10 ** -8)
 print(f'bisection result: {astar}')
 
+#problem 5
+f = lambda x: x ** 3 + x - 4
+[xstar, iter] = bisection_example.bisection(f, 1, 4, 10 ** -3)
+
 #problem 6
 f = lambda x: (x - 4 * np.sin(2 * x) - 3)
 x = np.linspace(-2.5, 10, 100)
