@@ -5,4 +5,12 @@ with input (3,5), lazy converges but newton does not. with the input (1.1,1.1), 
 jacobian times the function is less than one, we are close enough to the root to take more direct steps, and we should
 compute a new jacobian
 
-3)
+3) lazy newton took 0.0017006397247314453 seconds to complete 50 runs
+lazy newton took 7 iterations
+slacker newton took 0.0035467147827148438 seconds to complete 50 runs
+slacker newton took 4 iterations
+
+4) my neighbors' algorithms performed somewhere between lazy newton and newton, similar to my algorithm.
+their algorithms also converged in less than 8 iterations
+
+5) no time

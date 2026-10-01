@@ -3,6 +3,7 @@ import math
 import time
 from numpy.linalg import inv
 from numpy.linalg import norm
+import newtonNONLinear
 
 def SlackerNewton(x0, tol, Nmax):
     ''' Lazy Newton = use only the inverse of the Jacobian for initial guess'''

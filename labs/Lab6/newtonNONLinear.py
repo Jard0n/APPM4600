@@ -128,7 +128,8 @@ def LazyNewton(x0,tol,Nmax):
            xstar = x1
            ier =0
            return[xstar, ier,its]
-           ef LazyNewton(x0,tol,Nmax):
+
+def LazyNewton(x0,tol,Nmax):
 
     ''' Lazy Newton = use only the inverse of the Jacobian for initial guess'''
     ''' inputs: x0 = initial guess, tol = tolerance, Nmax = max its'''
@@ -148,11 +149,6 @@ def LazyNewton(x0,tol,Nmax):
 
        x0 = x1
 
-    xstar = x1
-    ier = 1
-    return[xstar,ier,its]
-       x0 = x1
-    
     xstar = x1
     ier = 1
     return[xstar,ier,its]
