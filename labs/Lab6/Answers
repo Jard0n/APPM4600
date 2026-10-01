@@ -1,0 +1,8 @@
+Prelab: with input (2,.5), newton converges but lazy newton does not.
+with input (3,5), lazy converges but newton does not. with the input (1.1,1.1), both methods converge to (1,1)
+
+1) the purpose of the derivative term in newton's method is to prevent overshooting. When the norm of the inverse
+jacobian times the function is less than one, we are close enough to the root to take more direct steps, and we should
+compute a new jacobian
+
+3)
