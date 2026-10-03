@@ -173,6 +173,15 @@ def test_create_with_failing_na_comparison():
         np.array(["y"], dtype=dt)
 
 
+def test_create_with_failing_na_str():
+    class BadStr(str):
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        StringDType(na_object=BadStr("na"))
+
+
 @pytest.mark.parametrize("i", list(range(5)))
 def test_set_replace_na(i):
     # Test strings of various lengths can be set to NaN and then replaced.
@@ -415,6 +424,104 @@ class TestStringLikeCasts:
         except UnicodeEncodeError:
             with pytest.raises(UnicodeEncodeError):
                 sarr.astype("S20")
+
+
+# malformed UTF-8, one sequence per distinct failure class; every bytes-like
+# -> StringDType ingress must reject these (gh-32287, gh-32288)
+INVALID_UTF8 = [
+    b"\x80AAAA",  # gh-32287: continuation byte as lead (0-length)
+    b"\xF8AAAA",  # 0xF8-0xFF lead (0-length)
+    b"\xFC\x80",  # 5-/6-byte lead, disallowed since RFC 3629
+    b"A" * 15 + b"\xF0",  # gh-32288: truncated 4-byte lead at the buffer end
+    b"A\xC3",  # truncated 2-byte lead
+    b"A\xE2\x82",  # truncated 3-byte lead
+    b"\xE2\x28\xA1",  # non-continuation byte inside a 3-byte sequence
+    b"\xC0\xAF",  # overlong 2-byte encoding of '/'
+    b"\xE0\x80\xAF",  # overlong 3-byte encoding of '/'
+    b"\xF0\x80\x80\xAF",  # overlong 4-byte encoding of '/'
+    b"\xED\xA0\x80",  # UTF-16 surrogate
+    b"\xF4\x90\x80\x80",  # code point above U+10FFFF
+    b"\xF5\x80\x80\x80",  # 0xF5-0xF7 lead, always above U+10FFFF
+]
+
+
+@pytest.mark.parametrize("bad", INVALID_UTF8)
+def test_bytes_cast_rejects_invalid_utf8(bad):
+    arr = np.array([bad], dtype=f"S{len(bad)}")
+    with pytest.raises(TypeError, match="Invalid UTF-8"):
+        arr.astype(StringDType())
+
+
+@pytest.mark.parametrize("bad", INVALID_UTF8)
+def test_void_cast_rejects_invalid_utf8(bad):
+    # the void ('V') -> StringDType cast validates the same way as bytes
+    arr = np.array([bad], dtype=f"V{len(bad)}")
+    with pytest.raises(TypeError, match="Invalid UTF-8"):
+        arr.astype(StringDType())
+
+
+def test_bytes_cast_roundtrips_valid_utf8():
+    # boundary code points adjacent to the reject cases above: largest 2-byte,
+    # U+D7FF below the surrogates, max code point
+    strings = ["héllo", "naïve", "😀 e", "über\x00embedded",
+               "߿퟿", "\U0010FFFF"]
+    barr = np.array([s.encode() for s in strings], dtype="S16")
+    sarr = barr.astype(StringDType())
+    assert list(sarr) == strings
+    assert list(sarr.astype("U16")) == strings
+
+
+def test_slice_extreme_step_no_overflow():
+    # an extreme step must not overflow the slice index and read out of bounds
+    arr = np.array(["abcd"], dtype=StringDType())
+    imax = np.iinfo(np.intp).max
+    assert np.strings.slice(arr, 1, None, imax).tolist() == ["b"]
+    assert np.strings.slice(arr, None, None, imax).tolist() == ["a"]
+    assert np.strings.slice(arr, None, None, -imax).tolist() == ["d"]
+    assert np.strings.slice(arr, 2, None, -imax).tolist() == ["c"]
+    mb = np.array(["a😀cd"], dtype=StringDType())
+    assert np.strings.slice(mb, 1, None, imax).tolist() == ["😀"]
+    imin = np.iinfo(np.intp).min
+    assert np.strings.slice(arr, None, None, imin).tolist() == ["d"]
+    assert np.strings.slice(mb, None, None, imin).tolist() == ["d"]
+
+
+def test_pad_extreme_width_overflow():
+    # width near the npy_intp max must raise OverflowError, not wrap the output
+    # size past the check (which surfaced as a MemoryError)
+    arr = np.array(["😀"], dtype=StringDType())
+    imax = np.iinfo(np.intp).max
+    for pad in (np.strings.ljust, np.strings.rjust, np.strings.center,
+                np.strings.zfill):
+        with pytest.raises(OverflowError):
+            pad(arr, imax)
+
+
+def test_pad_out_aliases_fill():
+    from numpy._core.umath import _center, _ljust, _rjust
+    dt = StringDType()
+    for pad, expected in [(_center, "***abc***"), (_ljust, "abc******"),
+                          (_rjust, "******abc")]:
+        a = np.array(["abc"], dtype=dt)
+        fill = np.array(["*"], dtype=dt)
+        assert pad(a, 9, fill, out=fill).tolist() == [expected]
+    # a fill longer than 15 bytes is stored in the arena, not the packed struct
+    a = np.array(["abc"], dtype=dt)
+    fill = np.array(["*" * 300], dtype=dt)
+    assert _center(a, 9, fill, out=fill).tolist() == ["***abc***"]
+
+
+def test_zfill_no_padding_no_oob():
+    # no padding is added for an empty input or a width <= the input length
+    dt = StringDType()
+    assert np.strings.zfill(np.array([""], dtype=dt), 20).tolist() == ["0" * 20]
+    assert np.strings.zfill(np.array([""], dtype=dt), 0).tolist() == [""]
+    assert np.strings.zfill(np.array(["42"], dtype=dt), 1).tolist() == ["42"]
+    assert np.strings.zfill(np.array(["-7"], dtype=dt), 5).tolist() == ["-0007"]
+    # the in-place path writes into a heap buffer the sanitizer can bounds-check
+    from numpy._core.umath import _zfill
+    a = np.array([""], dtype=dt)
+    assert _zfill(a, 20, out=a).tolist() == ["0" * 20]
 
 
 def test_additional_unicode_cast(dtype):
@@ -724,6 +831,79 @@ def test_fancy_indexing(string_list):
         assert_array_equal(sarr[ind], uarr[ind])
 
 
+@pytest.mark.parametrize("value", ["Z" * 20, "Z" * 5])
+def test_fancy_index_assign_0d_value(value):
+    # a 0-d value assigned through multiple fancy indices broadcasts to
+    # every selected element (gh-32153)
+    a = np.array(["v0", "v1", "v2", "v3"], dtype="T").reshape(2, 2)
+    a[[0, 1], [0, 1]] = np.array(value, dtype="T")
+    assert_array_equal(a, [[value, "v1"], ["v2", value]])
+    # the value may carry the destination's own dtype instance
+    a[[0, 1], [0, 1]] = np.array(value + "x", dtype=a.dtype)
+    assert_array_equal(a, [[value + "x", "v1"], ["v2", value + "x"]])
+
+
+def test_fancy_index_assign_subspace_distinct_allocators():
+    # Fancy indexing only the first dimension leaves the second dimension as
+    # a subspace copied from an independently-owned StringDType descriptor.
+    a, b, a_obj, b_obj = _make_distinct_arena_arrays(6)
+    a, a_obj = a.reshape(3, 2), a_obj.reshape(3, 2)
+    rhs, rhs_obj = b[:4].reshape(2, 2), b_obj[:4].reshape(2, 2)
+
+    a[[0, 2], :] = rhs
+    a_obj[[0, 2], :] = rhs_obj
+    assert_array_equal(a, a_obj)
+
+
+@pytest.mark.parametrize("buffered", [True, False])
+@pytest.mark.parametrize("pass_op_dtypes", [True, False])
+def test_nditer_allocated_output(buffered, pass_op_dtypes):
+    # an iterator-allocated StringDType output round-trips the values
+    # written through the iterator, and it.dtypes reports the descriptor
+    # that owns the allocated operand's data (gh-32153)
+    a = np.array(["x" * 20, "y" * 20, "z" * 20], dtype="T")
+    flags = ["refs_ok"] + (["buffered"] if buffered else [])
+    op_dtypes = [a.dtype, a.dtype] if pass_op_dtypes else None
+    it = np.nditer([a, None], flags=flags,
+                   op_flags=[["readonly"], ["writeonly", "allocate"]],
+                   op_dtypes=op_dtypes)
+    with it:
+        for x, y in it:
+            y[...] = x
+        out = it.operands[1]
+        assert it.dtypes[1] is out.dtype
+    assert_array_equal(out, a)
+
+
+def test_nditer_copy_and_writeback():
+    # requesting a distinct StringDType instance forces the iterator to
+    # copy the operand; the copied values read back correctly and, with
+    # updateifcopy, write back to the original array (gh-32153)
+    v = np.array(["Z" * 20, "Y" * 25], dtype="T")
+    dt = np.dtypes.StringDType()
+    np.empty(1, dtype=dt)  # attach dt to an array so it is a distinct instance
+
+    it = np.nditer([v], flags=["refs_ok"], op_flags=[["readonly", "copy"]],
+                   op_dtypes=[dt], casting="unsafe")
+    assert [str(x) for x in it] == ["Z" * 20, "Y" * 25]
+    assert it.dtypes[0] is it.operands[0].dtype
+
+    it = np.nditer([v], flags=["refs_ok"],
+                   op_flags=[["readwrite", "updateifcopy"]],
+                   op_dtypes=[dt], casting="unsafe")
+    with it:
+        for x in it:
+            x[...] = str(x) + "q"
+    assert v.tolist() == ["Z" * 20 + "q", "Y" * 25 + "q"]
+
+
+def test_ndarray_from_buffer_rejected():
+    # StringDType entries reference a per-descriptor arena, so an array
+    # cannot be created over caller-supplied buffer memory (gh-32153)
+    with pytest.raises(TypeError, match="buffer"):
+        np.ndarray((2,), dtype="T", buffer=bytearray(32))
+
+
 def test_fromiter_reused_dtype():
     # Reusing the same StringDType instance across fromiter
     # calls used to write strings into the wrong arena, creating corrupted arrays
@@ -974,6 +1154,35 @@ def test_string_to_bytes_invalid_ascii_error():
     )
 
 
+NON_NATIVE_BYTEORDER_CASES = [
+    ("i4", [1, -2, 300]),
+    ("u2", [1, 2, 300]),
+    ("f2", [1.5, -2.0]),
+    ("f8", [1.5, -2.0]),
+    ("c16", [1.5 + 2j]),
+    ("M8[s]", ["2020-01-01", "NaT"]),
+    ("m8[s]", [5, "NaT"]),
+    ("U3", ["abc", "d"]),
+]
+
+
+@pytest.mark.parametrize("dtype, values", NON_NATIVE_BYTEORDER_CASES)
+def test_non_native_byteorder_to_string(dtype, values):
+    native = np.array(values, dtype=dtype)
+    swapped = native.astype(native.dtype.newbyteorder("S"))
+    assert_array_equal(swapped.astype(StringDType()),
+                       native.astype(StringDType()))
+
+
+@pytest.mark.parametrize("dtype, values", NON_NATIVE_BYTEORDER_CASES)
+def test_string_to_non_native_byteorder(dtype, values):
+    native = np.array(values, dtype=dtype)
+    swapped_dtype = native.dtype.newbyteorder("S")
+    res = native.astype(StringDType()).astype(swapped_dtype)
+    assert res.dtype == swapped_dtype
+    assert_array_equal(res, native)
+
+
 def test_void_to_string_invalid_utf8_error():
     # invalid UTF-8 in a void buffer used to surface as a confusing
     # MemoryError because the error return of utf8_buffer_size was
@@ -1022,6 +1231,49 @@ def test_string_to_cfloat_cast_distinct_components(typename):
     )
     assert_array_equal(inp.astype(typename), expected)
 
+
+def test_cast_structured_field_view_strides():
+    # the numeric cast loops used to truncate byte strides that are not a
+    # multiple of the itemsize, like a complex128 field view of 24-byte records
+    rec = np.zeros(3, dtype=[("c", "c16"), ("f", "f8")])
+    rec["c"] = [1 + 1j, 2 + 2j, 3 + 3j]
+    rec["f"] = [10.0, 20.0, 30.0]
+
+    assert_array_equal(
+        rec["c"].astype("T"),
+        np.array(["(1+1j)", "(2+2j)", "(3+3j)"], dtype="T"),
+    )
+
+    rec["c"] = np.array(["4+4j", "5+5j", "6-6j"], dtype="T")
+    assert_array_equal(rec["c"], np.array([4 + 4j, 5 + 5j, 6 - 6j]))
+    assert_array_equal(rec["f"], np.array([10.0, 20.0, 30.0]))
+
+    # the f8 loops only see a mismatched stride on 32-bit architectures,
+    # where 8-byte types have 4-byte alignment
+    rec2 = np.zeros(3, dtype=[("v", "f8"), ("pad", "u4")])
+    rec2["v"] = [1.5, 2.5, 3.5]
+    assert_array_equal(
+        rec2["v"].astype("T"),
+        np.array(["1.5", "2.5", "3.5"], dtype="T"),
+    )
+    rec2["v"] = np.array(["4.5", "5.5", "6.5"], dtype="T")
+    assert_array_equal(rec2["v"], np.array([4.5, 5.5, 6.5]))
+    assert_array_equal(rec2["pad"], np.zeros(3, dtype="u4"))
+
+    # likewise the 8-byte datetime/timedelta loops only see a mismatched
+    # stride on 32-bit architectures
+    rec3 = np.zeros(3, dtype=[("t", "M8[D]"), ("td", "m8[s]"), ("pad", "u4")])
+    rec3["t"] = np.array(["2010-01-01", "NaT", "2015-02-03"], dtype="M8[D]")
+    rec3["td"] = np.array([12, "NaT", -34], dtype="m8[s]")
+    assert_array_equal(rec3["t"].astype("T"),
+                       np.array(["2010-01-01", "NaT", "2015-02-03"], dtype="T"))
+    assert_array_equal(rec3["td"].astype("T"),
+                       np.array(["12", "NaT", "-34"], dtype="T"))
+    rec3["t"] = np.array(["1993-06-05", "NaT", "2038-01-19"], dtype="T")
+    rec3["td"] = np.array(["-56", "NaT", "78"], dtype="T")
+    assert_array_equal(rec3["t"],
+                       np.array(["1993-06-05", "NaT", "2038-01-19"], dtype="M8[D]"))
+    assert_array_equal(rec3["td"], np.array([-56, "NaT", 78], dtype="m8[s]"))
 
 def test_take(string_list):
     sarr = np.array(string_list, dtype="T")
@@ -1185,6 +1437,16 @@ def test_multiply_two_string_raises():
     arr = np.array(["hello", "world"], dtype="T")
     with pytest.raises(np._core._exceptions._UFuncNoLoopError):
         np.multiply(arr, arr)
+
+
+def test_multiply_nonpositive_factor_or_empty():
+    # a non-positive factor or an empty input yields an empty string
+    dt = StringDType()
+    for factor in (0, -1, -100):
+        assert (np.array(["ab", ""], dtype=dt) * factor).tolist() == ["", ""]
+    assert (np.array([""], dtype=dt) * np.uint64(2**63)).tolist() == [""]
+    with pytest.raises(OverflowError):
+        np.array(["ab"], dtype=dt) * np.uint64(2**63)
 
 
 @pytest.mark.parametrize("use_out", [True, False])
@@ -1762,6 +2024,14 @@ def test_replace_non_default_repeat(count):
     assert_array_equal(result, np.array(["🐍--", "🦜†🦜†"], "T"))
 
 
+@pytest.mark.parametrize("count", [-1, -2, -2**63])
+def test_replace_negative_count_replaces_all(count):
+    # any negative count means "replace all", matching str.replace
+    arr = np.array(["aaa"], dtype="T")
+    assert_array_equal(np.strings.replace(arr, "a", "X", count),
+                       np.array(["XXX"], dtype="T"))
+
+
 def test_trailing_null_is_not_padding():
     arr = np.array(["x\0", "\0", "x\0y\0", "abc"], dtype=StringDType())
     nul = np.array("\0", dtype=StringDType())
@@ -2335,6 +2605,9 @@ def test_concatenate_distinct_allocators():
     assert_array_equal(np.vstack([a, b]), np.vstack([a_obj, b_obj]))
     assert_array_equal(np.hstack([a, b]), expected)
 
+    # a single array with axis=None is returned unchanged
+    assert_array_equal(np.concatenate([a], axis=None), a_obj)
+
 
 def test_where_distinct_allocators():
     a, b, a_obj, b_obj = _make_distinct_arena_arrays(101)
@@ -2571,3 +2844,75 @@ def test_flat_assignment_distinct_allocators():
     d.flat = ["xy"]
     d_obj.flat = ["xy"]
     assert_array_equal(d, d_obj)
+
+
+def test_ufunc_overlapping_out_distinct_allocators():
+    a, _, a_obj, _ = _make_distinct_arena_arrays(20)
+    # out= overlapping an input (reversed view)
+    np.add(a, a, out=a[::-1])
+    np.add(a_obj, a_obj, out=a_obj[::-1])
+    assert_array_equal(a, a_obj)
+
+    # same through the masked (where=) loop
+    b, _, b_obj, _ = _make_distinct_arena_arrays(20, prefix_a="B")
+    mask = np.arange(10) % 2 == 0
+    np.add(b[:10], b[:10], out=b[5:15], where=mask)
+    np.add(b_obj[:10], b_obj[:10], out=b_obj[5:15], where=mask)
+    assert_array_equal(b, b_obj)
+
+
+def test_reduce_distinct_allocators():
+    a, acc_out, a_obj, acc_out_obj = _make_distinct_arena_arrays(50)
+    assert_array_equal(np.maximum.reduce(a), np.maximum.reduce(a_obj))
+    assert_array_equal(np.add.accumulate(a), np.add.accumulate(a_obj))
+
+    # no outer iterator, but the independently-allocated output still has a
+    # different descriptor from the input
+    np.add.accumulate(a, out=acc_out)
+    np.add.accumulate(a_obj, out=acc_out_obj)
+    assert_array_equal(acc_out, acc_out_obj)
+
+    # a multidimensional accumulate uses an outer iterator and allocates a
+    # finalized output descriptor
+    c, _, c_obj, _ = _make_distinct_arena_arrays(6, prefix_a="C")
+    c, c_obj = c.reshape(2, 3), c_obj.reshape(2, 3)
+    assert_array_equal(
+        np.add.accumulate(c, axis=1), np.add.accumulate(c_obj, axis=1)
+    )
+
+    # a long initial value exercises the finalized reduction descriptors used
+    # to create and populate the masked-reduction initial-value buffer
+    mask = np.array([[True, False, True], [False, True, True]])
+    assert_array_equal(
+        np.maximum.reduce(c, axis=1, where=mask, initial="initial" * 4),
+        np.maximum.reduce(c_obj, axis=1, where=mask, initial="initial" * 4),
+    )
+
+    # accumulate in place (out aliases the operand)
+    np.add.accumulate(a, out=a)
+    np.add.accumulate(a_obj, out=a_obj)
+    assert_array_equal(a, a_obj)
+
+    # reduce with out= overlapping the operand
+    b, _, b_obj, _ = _make_distinct_arena_arrays(6, prefix_a="B")
+    b, b_obj = b.reshape(2, 3), b_obj.reshape(2, 3)
+    np.maximum.reduce(b, axis=0, out=b[0])
+    np.maximum.reduce(b_obj, axis=0, out=b_obj[0])
+    assert_array_equal(b, b_obj)
+
+
+def test_nditer_distinct_allocators():
+    a, b, a_obj, _ = _make_distinct_arena_arrays(20)
+
+    # a 0-d readonly operand cast to a distinct instance reads back, and
+    # it.dtypes agrees with the operand the iterator actually uses
+    zero_d = np.array(a_obj[0], dtype="T")
+    it = np.nditer([zero_d], flags=["refs_ok"], op_dtypes=[b.dtype],
+                   casting="unsafe")
+    assert str(next(it)) == a_obj[0]
+    assert it.dtypes[0] is it.operands[0].dtype
+
+    # a buffered iterator and its copy read the same values
+    it = np.nditer([a], flags=["refs_ok", "buffered"], op_dtypes=[b.dtype],
+                   casting="unsafe")
+    assert_array_equal([str(x) for x in it.copy()], a_obj.tolist())

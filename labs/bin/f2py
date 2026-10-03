@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/home/jrdn/Desktop/APPM 4600/labs/bin/python3" "$0" "$@"
+'''exec' "/home/jrdn/Desktop/APPM 4600/APPM4600/labs/bin/python" "$0" "$@"
 ' '''
 # -*- coding: utf-8 -*-
 import re
