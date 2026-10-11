@@ -45,5 +45,5 @@ def Newton(x0, tol, Nmax):
     ier = 1
     return [xstar, ier, its]
 
-[xstar, ier, its] = Newton([1,1], tol, 100000)
+[xstar, ier, its] = Newton([0,0], tol, 100000)
 print(xstar, its)
