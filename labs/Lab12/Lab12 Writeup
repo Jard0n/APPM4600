@@ -1,0 +1,47 @@
+QR Factorization Steps:
+Given matrix A (size m x n)
+1) Gram Schmidt Process
+    q_1 = a_1 / ||a_1||
+    q_2 = (m_2  - q_1 dot m_2 * q_1) / ||(m_2  - q_1 dot m_2 * q_1)||  ...
+    q_n = a_n - sum(proj_q(a_n))
+2) R = Q'A (where Q' is Q transpose)
+3) c = Q'b
+4) solve triangular system by back substution
+    R_1 * x = R_1_1 * x_1 = c_1...
+
+
+2)
+For N = 100, Time for Scipy.solve: 0.00042366981506347656
+For N = 100, Time for LU Factorization: 7.581710815429688e-05
+For N = 100, Time for LU solve: 7.987022399902344e-05
+Total for LU method: 0.0001556873321533203
+
+For N = 500, Time for Scipy.solve: 0.12036657333374023
+For N = 500, Time for LU Factorization: 0.0034770965576171875
+For N = 500, Time for LU solve: 0.0003676414489746094
+Total for LU method: 0.003844738006591797
+
+For N = 1000, Time for Scipy.solve: 0.09871459007263184
+For N = 1000, Time for LU Factorization: 0.0099334716796875
+For N = 1000, Time for LU solve: 0.00045680999755859375
+Total for LU method: 0.010390281677246094
+
+For N = 2000, Time for Scipy.solve: 0.13916802406311035
+For N = 2000, Time for LU Factorization: 0.049875497817993164
+For N = 2000, Time for LU solve: 0.0015854835510253906
+Total for LU method: 0.051460981369018555
+
+For N = 4000, Time for Scipy.solve: 0.5037698745727539
+For N = 4000, Time for LU Factorization: 0.3435194492340088
+For N = 4000, Time for LU solve: 0.005869626998901367
+Total for LU method: 0.34938907623291016
+
+For N = 5000, Time for Scipy.solve: 0.843409538269043
+For N = 5000, Time for LU Factorization: 0.6399440765380859
+For N = 5000, Time for LU solve: 0.00931859016418457
+Total for LU method: 0.6492626667022705
+
+3) LU is always faster in my testing. I expected LU to be faster for multiple  (<10) right hand sides
+
+3.4) 1)
+I am unable to solve using the normal equations. A is poorly conditioned and A'A has a condition number equal to cond(A)^2. When my solver checks the condition number of the matrix, it flags it as singular
